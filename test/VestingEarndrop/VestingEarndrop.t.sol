@@ -59,6 +59,25 @@ contract VestingEarndropTest is Test {
     assertEq(vestingEarndrop.signer(), newSigner);
   }
 
+  function testSetSignerInvalidAddress() public {
+    vm.prank(owner);
+    vm.expectRevert(VestingEarndrop.InvalidAddress.selector);
+    vestingEarndrop.setSigner(address(0));
+  }
+
+  function testSetTreasurer() public {
+    address newTreasurer = makeAddr("newTreasurer");
+    vm.prank(owner);
+    vestingEarndrop.setTreasurer(newTreasurer);
+    assertEq(vestingEarndrop.treasurer(), newTreasurer);
+  }
+
+  function testSetTreasurerInvalidAddress() public {
+    vm.prank(owner);
+    vm.expectRevert(VestingEarndrop.InvalidAddress.selector);
+    vestingEarndrop.setTreasurer(address(0));
+  }
+
   function testActivateEarndropWithOverflowEarndropId() public {
     uint256 earndropId = type(uint256).max;
     address tokenAddress = address(0);
@@ -206,7 +225,7 @@ contract VestingEarndropTest is Test {
     stages[0] = VestingEarndrop.Stage({stageId: 1, startTime: block.timestamp + 3600, endTime: block.timestamp + 7200});
 
     token.mint(address(this), totalAmount);
-    token.approve(address(vestingEarndrop), totalAmount / 2); // 只批准一半的额度
+    token.approve(address(vestingEarndrop), totalAmount / 2);
 
     bytes32 messageHash =
       _hashEarndropActivate(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, address(this));
@@ -329,6 +348,110 @@ contract VestingEarndropTest is Test {
 
     vm.expectRevert(abi.encodeWithSelector(VestingEarndrop.InvalidParameter.selector, "Duplicate stageId found"));
     vestingEarndrop.activateEarndrop(earndropId2, tokenAddress, merkleTreeRoot, totalAmount, stages2, signature2);
+  }
+
+  function testRevokeNotExistsEarndrop() public {
+    uint256 earndropId = 2000;
+    address recipient = makeAddr("recipient");
+
+    vm.expectRevert(abi.encodeWithSelector(VestingEarndrop.InvalidParameter.selector, "Earndrop does not exist"));
+
+    vestingEarndrop.revokeEarndrop(earndropId, recipient);
+  }
+
+  function testRevokeAlreadyRevokedEarndrop() public {
+    uint256 earndropId = 404;
+    address tokenAddress = address(token);
+    bytes32 merkleTreeRoot = keccak256(abi.encodePacked("merkleRoot"));
+    uint256 totalAmount = 1 ether;
+
+    VestingEarndrop.Stage[] memory stages = new VestingEarndrop.Stage[](1);
+    stages[0] = VestingEarndrop.Stage({stageId: 1, startTime: block.timestamp + 3600, endTime: block.timestamp + 7200});
+
+    token.mint(address(this), totalAmount);
+    token.approve(address(vestingEarndrop), totalAmount);
+
+    bytes32 messageHash =
+      _hashEarndropActivate(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, address(this));
+
+    (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, messageHash);
+    bytes memory signature = abi.encodePacked(r, s, v);
+
+    vm.expectEmit(true, true, true, true);
+    emit VestingEarndrop.EarndropActivated(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, address(this));
+
+    // activate earndrop
+    vestingEarndrop.activateEarndrop(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, signature);
+
+    // revoke earndrop
+    address recipient = makeAddr("recipient");
+    vestingEarndrop.revokeEarndrop(earndropId, recipient);
+
+    // try to revoke again
+    vm.expectRevert(abi.encodeWithSelector(VestingEarndrop.InvalidParameter.selector, "Earndrop already revoked"));
+    vestingEarndrop.revokeEarndrop(earndropId, recipient);
+  }
+
+  function testRevokeEarndropWithoutAdminPermission() public {
+    uint256 earndropId = 1;
+    address tokenAddress = address(token);
+    bytes32 merkleTreeRoot = keccak256(abi.encodePacked("merkleRoot"));
+    uint256 totalAmount = 1 ether;
+
+    VestingEarndrop.Stage[] memory stages = new VestingEarndrop.Stage[](1);
+    stages[0] = VestingEarndrop.Stage({stageId: 1, startTime: block.timestamp + 3600, endTime: block.timestamp + 7200});
+
+    token.mint(address(this), totalAmount);
+    token.approve(address(vestingEarndrop), totalAmount);
+
+    bytes32 activationHash =
+      _hashEarndropActivate(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, address(this));
+    (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, activationHash);
+    bytes memory activationSignature = abi.encodePacked(r, s, v);
+
+    // Activate the earndrop
+    vestingEarndrop.activateEarndrop(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, activationSignature);
+
+    // Simulate a different msg.sender (not the admin)
+    address unauthorizedUser = makeAddr("unauthorizedUser");
+    vm.prank(unauthorizedUser);
+
+    // Attempt to revoke the earndrop
+    vm.expectRevert(VestingEarndrop.Unauthorized.selector);
+    vestingEarndrop.revokeEarndrop(earndropId, unauthorizedUser);
+  }
+
+  function testSuccessRevokeEarndrop() public {
+    uint256 earndropId = 404;
+    address tokenAddress = address(token);
+    bytes32 merkleTreeRoot = keccak256(abi.encodePacked("merkleRoot"));
+    uint256 totalAmount = 1 ether;
+
+    VestingEarndrop.Stage[] memory stages = new VestingEarndrop.Stage[](1);
+    stages[0] = VestingEarndrop.Stage({stageId: 1, startTime: block.timestamp + 3600, endTime: block.timestamp + 7200});
+
+    token.mint(address(this), totalAmount);
+    token.approve(address(vestingEarndrop), totalAmount);
+
+    bytes32 messageHash =
+      _hashEarndropActivate(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, address(this));
+
+    (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, messageHash);
+    bytes memory signature = abi.encodePacked(r, s, v);
+
+    vm.expectEmit(true, true, true, true);
+    emit VestingEarndrop.EarndropActivated(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, address(this));
+
+    // activate earndrop
+    vestingEarndrop.activateEarndrop(earndropId, tokenAddress, merkleTreeRoot, totalAmount, stages, signature);
+
+    // revoke earndrop
+    address recipient = makeAddr("recipient");
+    vestingEarndrop.revokeEarndrop(earndropId, recipient);
+
+    (,, bool isRevoked,,,,) = vestingEarndrop.earndrops(earndropId);
+    assertEq(isRevoked, true);
+    assertEq(token.balanceOf(recipient), totalAmount);
   }
 
   function testClaimEarndropSuccessAndAlreadyClaimed() public {
@@ -592,10 +715,8 @@ contract VestingEarndropTest is Test {
 
     vestingEarndrop.multiClaimEarndrop{value: claimFee}(earndropId, claimParams, claimSignature);
 
-    // 验证领取状态
     assertTrue(vestingEarndrop.isClaimed(earndropId, leafIndex1));
 
-    // 验证余额
     assertEq(token.balanceOf(address(this)), claimAmount1);
   }
 
